@@ -2,14 +2,14 @@ name: Daily Tefas Crawler
 
 on:
   schedule:
-    - cron: '0 20 * * 1-5' # Hafta içi her gün TSİ 23:00 civarı çalışır (UTC 20:00)
-  workflow_dispatch: # Manuel çalıştırmak istersen bu buton çıkar
+    - cron: '30 18 * * 1-5' # TSİ 21:30 (Piyasa kapandıktan sonra)
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Dosyayı geri commit etmek için izin
+      contents: write
 
     steps:
     - name: Checkout code
@@ -26,6 +26,8 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run crawler
+      env:
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }} # Secret'ı koda aktarır
       run: python main.py
 
     - name: Commit and push changes
