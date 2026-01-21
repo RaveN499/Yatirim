@@ -38,7 +38,7 @@ def fetch_tefas_data():
     return results
 
 def fetch_from_ziraat_portfoy():
-    """Ziraat Portföy sitesinden ZBB ve Altın verilerini çek"""
+    """Ziraat Portföy sitesinden ZPX30 ve Altın verilerini çek"""
     print("\n🏦 Ziraat Portföy sitesinden veri çekiliyor...")
     results = []
     
@@ -53,7 +53,7 @@ def fetch_from_ziraat_portfoy():
         if response.status_code == 200:
             html = response.text
             
-            # ZPX30 (ZBB'nin yeni kodu)
+            # ZPX30
             zpx30_match = re.search(r'ZPX30[^0-9]*([0-9,\.]+)', html)
             if zpx30_match:
                 price_str = zpx30_match.group(1).replace(',', '.')
@@ -62,11 +62,11 @@ def fetch_from_ziraat_portfoy():
                     price_str = price_str.replace('.', '', price_str.count('.')-1)
                 price = float(price_str)
                 results.append({
-                    "code": "ZBB",
+                    "code": "ZPX30",
                     "price": price,
-                    "source": "Ziraat (ZPX30)"
+                    "source": "Ziraat Portföy"
                 })
-                print(f"  ✓ ZBB: {price:.4f} TL")
+                print(f"  ✓ ZPX30: {price:.4f} TL")
             else:
                 print(f"  ✗ ZPX30 bulunamadı")
             
@@ -150,7 +150,7 @@ def main():
     tefas_results = fetch_tefas_data()
     results.extend(tefas_results)
     
-    # 2. Ziraat Portföy'den ZBB, ALTIN GRAM ve ZGOLD
+    # 2. Ziraat Portföy'den ZPX30, ALTIN GRAM ve ZGOLD
     ziraat_results = fetch_from_ziraat_portfoy()
     results.extend(ziraat_results)
     
