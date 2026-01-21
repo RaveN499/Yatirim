@@ -10,7 +10,7 @@ portfoy = {
     "TTE": {"adet": 0, "maliyet": 1.42},
     "ITP": {"adet": 0, "maliyet": 2.10},
     "ZPX30": {"adet": 0, "maliyet": 150.0},  # Yeni eklendi
-    "TZL": {"adet": 9000, "maliyet": 995,99},   # Yeni eklendi
+    "TZL": {"adet": 9000, "maliyet": 995.99},   # Yeni eklendi
     "ALTIN.S1": {"adet": 100, "maliyet": 22.50}
 }
 
