@@ -1,187 +1,117 @@
 import os
 import requests
-import pandas as pd
-from tefas import Crawler
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
 
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-TEFAS_FUNDS = ["TTE", "ITP", "TZL"]
 TODAY = datetime.now().strftime("%Y-%m-%d")
-WEEK_AGO = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-def fetch_tefas_data():
-    """TEFAS fonlarını çek"""
-    results = []
-    print("📊 TEFAS fonları çekiliyor...")
-    
-    try:
-        tefas = Crawler()
-        data = tefas.fetch(start=WEEK_AGO, end=TODAY)
-        
-        for fund in TEFAS_FUNDS:
-            fund_data = data[data['code'] == fund]
-            if not fund_data.empty:
-                latest = fund_data.sort_values('date', ascending=False).iloc[0]
-                results.append({
-                    "code": fund, 
-                    "price": float(latest['price']),
-                    "source": "TEFAS"
-                })
-                print(f"  ✓ {fund}: {latest['price']:.4f} TL")
-            else:
-                print(f"  ✗ {fund}: Bulunamadı")
-                
-    except Exception as e:
-        print(f"  ✗ TEFAS hatası: {e}")
-    
-    return results
+# Fintables'tan çekilecek tüm ürünler
+PRODUCTS = {
+    "ITP": {"url": "https://fintables.com/fonlar/ITP", "name": "ITP"},
+    "TTE": {"url": "https://fintables.com/fonlar/TTE", "name": "TTE"},
+    "TZL": {"url": "https://fintables.com/fonlar/TZL", "name": "TZL"},
+    "ZPX30": {"url": "https://fintables.com/fonlar/ZPX30", "name": "ZPX30"},
+    "ALTIN.S1": {"url": "https://fintables.com/sertifikalar/ALTIN.S1", "name": "ALTIN.S1"},
+    "GRAM_ALTIN": {"url": "https://fintables.com/emtia/altin", "name": "GRAM ALTIN"},
+}
 
-def fetch_from_ziraat_portfoy():
-    """Ziraat Portföy sitesinden ZPX30 ve Altın verilerini çek"""
-    print("\n🏦 Ziraat Portföy sitesinden veri çekiliyor...")
-    results = []
-    
+def fetch_from_fintables(url, name):
+    """Fintables'tan veri çek"""
     try:
-        url = "https://www.ziraatportfoy.com.tr/tr"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://fintables.com/',
         }
         
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
         
         if response.status_code == 200:
             html = response.text
             
-            # ZPX30
-            zpx30_match = re.search(r'ZPX30[^0-9]*([0-9,\.]+)', html)
-            if zpx30_match:
-                price_str = zpx30_match.group(1).replace(',', '.')
-                # Eğer nokta binlik ayracıysa düzelt
-                if price_str.count('.') > 1:
-                    price_str = price_str.replace('.', '', price_str.count('.')-1)
-                price = float(price_str)
-                results.append({
-                    "code": "ZPX30",
-                    "price": price,
-                    "source": "Ziraat Portföy"
-                })
-                print(f"  ✓ ZPX30: {price:.4f} TL")
-            else:
-                print(f"  ✗ ZPX30 bulunamadı")
+            # Çoklu fiyat pattern'leri (Fintables'ın farklı sayfaları için)
+            patterns = [
+                r'<span[^>]*class="[^"]*price[^"]*"[^>]*>[\s]*([0-9.,]+)[\s]*</span>',
+                r'data-price="([0-9.,]+)"',
+                r'"price"[:\s]+([0-9.,]+)',
+                r'"lastPrice"[:\s]+([0-9.,]+)',
+                r'Fiyat[^0-9]*([0-9.,]+)',
+                r'Son Fiyat[^0-9]*([0-9.,]+)',
+                r'class="text-[^"]*"[^>]*>([0-9.,]+)</.*?>.*?TL',
+                r'>([0-9.,]+)\s*₺',
+                r'>([0-9.,]+)\s*TL',
+            ]
             
-            # ALTIN GRAM - Piyasa fiyatı
-            altin_gram_match = re.search(r'ALTIN GRAM - TL[^0-9]*([0-9,\.]+)', html)
-            if altin_gram_match:
-                price_str = altin_gram_match.group(1).replace(',', '.')
-                if price_str.count('.') > 1:
-                    price_str = price_str.replace('.', '', price_str.count('.')-1)
-                price = float(price_str)
-                results.append({
-                    "code": "ALTIN GRAM",
-                    "price": price,
-                    "source": "Ziraat Portföy"
-                })
-                print(f"  ✓ ALTIN GRAM: {price:.4f} TL")
-            else:
-                print(f"  ✗ ALTIN GRAM bulunamadı")
+            for pattern in patterns:
+                matches = re.findall(pattern, html, re.IGNORECASE)
+                if matches:
+                    # İlk bulunan sayıyı al
+                    price_str = matches[0].replace(',', '.')
+                    # Binlik ayraç varsa düzelt
+                    if price_str.count('.') > 1:
+                        price_str = price_str.replace('.', '', price_str.count('.')-1)
+                    
+                    try:
+                        price = float(price_str)
+                        # Mantıklı fiyat kontrolü
+                        if 0.01 < price < 100000:
+                            return price
+                    except ValueError:
+                        continue
             
-            # ZGOLD (Altın Katılım Fonu) - 10 gram fiyatı
-            zgold_match = re.search(r'ZGOLD[^0-9]*([0-9,\.]+)', html)
-            if zgold_match:
-                price_str = zgold_match.group(1).replace(',', '.')
-                if price_str.count('.') > 1:
-                    price_str = price_str.replace('.', '', price_str.count('.')-1)
-                price = float(price_str)
-                
-                # ZGOLD 10 gram altın fiyatı olduğu için gram fiyatına çevir
-                gram_price = price / 10
-                results.append({
-                    "code": "ZGOLD (Gram)",
-                    "price": gram_price,
-                    "source": "Ziraat (ZGOLD÷10)"
-                })
-                print(f"  ✓ ZGOLD: {price:.4f} TL (Gram: {gram_price:.4f} TL)")
-            else:
-                print(f"  ✗ ZGOLD bulunamadı")
-                
+            print(f"    ⚠️ HTML'de fiyat bulunamadı, ilk 500 karakter:")
+            print(f"    {html[:500]}...")
         else:
-            print(f"  ✗ HTTP hatası: {response.status_code}")
+            print(f"    ✗ HTTP {response.status_code}")
             
     except Exception as e:
-        print(f"  ✗ Ziraat Portföy hatası: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"    ✗ Hata: {str(e)[:70]}")
     
-    return results
-
-def fetch_altin_s1():
-    """ALTIN.S1 (Midas altın fonu) fiyatını çek"""
-    print("\n💰 ALTIN.S1 (Midas) fiyatı çekiliyor...")
-    
-    # 1. yfinance ile dene
-    try:
-        import yfinance as yf
-        symbols = ["ALTINS1.IS", "GLDGR.IS", "ALTIN.IS"]
-        
-        for symbol in symbols:
-            try:
-                print(f"  yfinance: {symbol}")
-                df = yf.download(symbol, period="5d", progress=False, timeout=10)
-                if not df.empty:
-                    price = float(df['Close'].iloc[-1])
-                    # ALTIN.S1 genelde 60-90 TL arası (10 gram)
-                    if 50 < price < 100:
-                        print(f"    ✓ {price:.4f} TL")
-                        return {"code": "ALTIN.S1", "price": price, "source": symbol}
-            except Exception as e:
-                print(f"    ✗ {str(e)[:50]}")
-                continue
-    except Exception as e:
-        print(f"  yfinance hatası: {e}")
-    
-    print("  ⚠️ ALTIN.S1 bulunamadı")
     return None
 
 def main():
     results = []
     
-    # 1. TEFAS fonları (TTE, ITP, TZL)
-    tefas_results = fetch_tefas_data()
-    results.extend(tefas_results)
+    print("🌐 Fintables'tan tüm veriler çekiliyor...\n")
     
-    # 2. Ziraat Portföy'den ZPX30, ALTIN GRAM ve ZGOLD
-    ziraat_results = fetch_from_ziraat_portfoy()
-    results.extend(ziraat_results)
+    for code, info in PRODUCTS.items():
+        print(f"📊 {info['name']} çekiliyor...")
+        print(f"   URL: {info['url']}")
+        
+        price = fetch_from_fintables(info['url'], info['name'])
+        
+        if price:
+            results.append({
+                "code": info['name'],
+                "price": price,
+                "source": "Fintables"
+            })
+            print(f"   ✓ {info['name']}: {price:.4f} TL\n")
+        else:
+            print(f"   ✗ {info['name']}: Alınamadı\n")
     
-    # 3. ALTIN.S1 (Midas altın fonu)
-    altin_s1_result = fetch_altin_s1()
-    if altin_s1_result:
-        results.append(altin_s1_result)
-    
-    # 4. Discord'a gönder
-    print(f"\n{'='*60}")
+    # Sonuçları göster ve Discord'a gönder
+    print(f"{'='*60}")
     if results:
-        print(f"✅ {len(results)} ürün bulundu")
+        print(f"✅ {len(results)}/{len(PRODUCTS)} ürün bulundu")
         send_to_discord(results)
         
         print("\n📋 Özet:")
-        for item in results:
-            print(f"  • {item['code']}: {item['price']:.4f} TL [{item['source']}]")
+        for item in sorted(results, key=lambda x: x['code']):
+            print(f"  • {item['code']}: {item['price']:.4f} TL")
     else:
         print("❌ Hiç veri bulunamadı!")
+        print("\nℹ️  Fintables siteye erişim engellenmiş olabilir.")
+        print("   Alternatif: TEFAS + Ziraat Portföy kombinasyonunu kullanın.")
 
 def send_to_discord(data):
     fields = []
     for item in sorted(data, key=lambda x: x['code']):
-        # Kaynak bilgisini sadece TEFAS dışındakiler için göster
-        source_text = ""
-        if item['source'] != 'TEFAS':
-            source_text = f"\n_{item['source']}_"
-            
         fields.append({
             "name": f"🔹 {item['code']}",
-            "value": f"**Fiyat:** {item['price']:.4f} TL{source_text}",
+            "value": f"**Fiyat:** {item['price']:.4f} TL",
             "inline": True
         })
 
@@ -190,7 +120,7 @@ def send_to_discord(data):
             "title": f"📈 Günlük Portföy Özeti ({TODAY})",
             "color": 3066993,
             "fields": fields,
-            "footer": {"text": "Ziraat & Midas Yatırım Takibi"}
+            "footer": {"text": "Fintables - Ziraat & Midas Yatırım Takibi"}
         }]
     }
     
