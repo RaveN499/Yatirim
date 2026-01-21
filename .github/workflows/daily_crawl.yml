@@ -2,7 +2,7 @@ name: Daily Tefas Crawler
 
 on:
   schedule:
-    - cron: '30 18 * * 1-5' # TSİ 21:30 (Piyasa kapandıktan sonra)
+    - cron: '30 18 * * 1-5' # Hafta içi her gün TSİ 21:30
   workflow_dispatch:
 
 jobs:
@@ -18,22 +18,14 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.10' # <--- Burası çok kritik, tam olarak böyle olmalı
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install tefas-crawler pandas yfinance requests
 
     - name: Run crawler
       env:
-        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }} # Secret'ı koda aktarır
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: python main.py
-
-    - name: Commit and push changes
-      run: |
-        git config --global user.name "GitHub Action"
-        git config --global user.email "action@github.com"
-        git add portfolio_history.csv
-        git commit -m "Daily update: $(date)" || exit 0
-        git push
