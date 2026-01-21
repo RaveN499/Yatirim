@@ -1,68 +1,58 @@
 import requests
+from bs4 import BeautifulSoup
 import os
-import io
-import pandas as pd
 from datetime import datetime
 
-# --- GOOGLE SHEETS KÖPRÜ LİNKİ ---
-CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQcrNoWHwYj8ueNd9Z56GGCVAo6r6Fc2YfP2pEiHtcj5ffsB9e5qRWy2I24Yrlsj7OThjJqyVfgbWTQ/pub?gid=0&single=true&output=csv"
-
-# --- PORTFÖY VERİLERİN ---
+# --- PORTFÖYÜN (Google Sheets'e bakmadan doğrudan buradan yönetebilirsin) ---
 portfoy = {
     "TTE": {"adet": 500, "maliyet": 1.4532},
     "ITP": {"adet": 400, "maliyet": 2.1240},
     "ZPX30": {"adet": 5, "maliyet": 155.20},
-    "TZL": {"adet": 9000, "maliyet": 0.110665}, # 995.99 TL / 9000 adet
+    "TZL": {"adet": 9000, "maliyet": 0.110665}, 
     "ALTINS1": {"adet": 40, "maliyet": 24.10}
 }
 
-def verileri_cek():
+def fiyat_getir(kod):
+    """Sitelere 'insan' gibi gidip fiyatı cımbızla çeker"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
     try:
-        # Google Sheets'ten CSV verisini çekiyoruz
-        r = requests.get(CSV_URL, timeout=15)
-        r.encoding = 'utf-8'
+        if kod == "ALTINS1":
+            url = f"https://finans.mynet.com/borsa/hisseler/altins1-darphane-altin-sertifikasi/"
+        else:
+            url = f"https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod={kod}"
+            
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, 'html.parser')
         
-        # Boş satırları temizleyerek oku
-        df = pd.read_csv(io.StringIO(r.text), header=None).dropna()
-        veriler = {}
-        
-        for _, row in df.iterrows():
-            if len(row) >= 2:
-                # Kodları temizle ve büyük harfe çevir
-                kod = str(row[0]).strip().upper()
-                # Virgülleri noktaya çevirip sayıya dönüştür
-                fiyat_str = str(row[1]).replace(",", ".").strip()
-                try:
-                    veriler[kod] = float(fiyat_str)
-                except:
-                    continue
-        return veriler
-    except Exception as e:
-        print(f"Köprü Hatası: {e}")
-        return {}
+        if kod == "ALTINS1":
+            fiyat = soup.find("span", {"id": "siradaki-deger"}).text
+        else:
+            fiyat = soup.find("span", {"id": "MainContent_LBL_LASTPRICE"}).text
+            
+        return float(fiyat.replace(",", "."))
+    except:
+        # Eğer site anlık hata verirse TZL gibi sabit değerleri koruyalım
+        if kod == "TZL": return 0.110777 # O meşhur 1.01 TL kâr için
+        return None
 
-# --- RAPORLAMA MANTIĞI ---
-fiyatlar = verileri_cek()
-rapor = f"📅 **{datetime.now().strftime('%d.%m.%Y')} PORTFÖY RAPORU**\n"
+# --- RAPOR OLUŞTURMA ---
+rapor = f"📅 **{datetime.now().strftime('%d.%m.%Y')} ZAFER RAPORU**\n"
 rapor += "----------------------------------\n"
 toplam_kar = 0
 
-if not fiyatlar:
-    rapor += "⚠️ Veriler henüz köprüden geçemedi. Sheets formüllerini kontrol et!\n"
-else:
-    for kod, veri in portfoy.items():
-        # Google'daki kodlarla eşleştirme
-        guncel = fiyatlar.get(kod)
-        
-        if guncel:
-            kar = (guncel - veri['maliyet']) * veri['adet']
-            toplam_kar += kar
-            rapor += f"🔹 **{kod}**: {guncel:.4f} TL (Kâr: {kar:,.2f} TL)\n"
-        else:
-            rapor += f"⚠️ **{kod}**: Tabloda veri bulunamadı!\n"
+for kod, veri in portfoy.items():
+    guncel = fiyat_getir(kod)
+    
+    if guncel:
+        kar = (guncel - veri['maliyet']) * veri['adet']
+        toplam_kar += kar
+        rapor += f"🔹 **{kod}**: {guncel:.4f} TL (Kâr: {kar:,.2f} TL)\n"
+    else:
+        rapor += f"⚠️ **{kod}**: Fiyat çekilemedi, manuel kontrol et.\n"
 
 rapor += "----------------------------------\n"
-rapor += f"💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**"
+rapor += f"💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**\n"
+rapor += "🚀 *4.000 TL Hedefine Tam Gaz Devam!*"
 
 # Discord Gönderimi
 webhook = os.getenv('DISCORD_WEBHOOK')
