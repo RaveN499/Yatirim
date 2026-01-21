@@ -2,74 +2,69 @@ import os
 import requests
 import pandas as pd
 from tefas import Crawler
-from datetime import datetime
-import yfinance as yf
-import sys
+from datetime import datetime, timedelta
 
 # Ayarlar
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-# ZPX yerine ZBB eklendi
 FUNDS = ["TTE", "ITP", "ZBB", "TZL"]
 TODAY = datetime.now().strftime("%Y-%m-%d")
+YESTERDAY = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def main():
-    print(f"Python Versiyonu: {sys.version}")
     tefas = Crawler()
-    
-    # 1. TEFAS Verilerini Çek
+    portfolio_data = []
+
+    # 1. TEFAS Verileri (ZBB, TTE, ITP, TZL)
     try:
-        # Tüm fonları çekip listedekileri filtrelemek daha garantidir
+        # Önce bugünü dene
         data = tefas.fetch(start=TODAY)
-        my_funds_data = data[data['code'].isin(FUNDS)][['date', 'code', 'price']]
-        print(f"TEFAS'tan çekilen fonlar: {my_funds_data['code'].tolist()}")
+        if data.empty:
+            print("Bugünün verisi henüz yok, düne bakılıyor...")
+            data = tefas.fetch(start=YESTERDAY)
+        
+        my_funds = data[data['code'].isin(FUNDS)]
+        for _, row in my_funds.iterrows():
+            portfolio_data.append({'code': row['code'], 'price': float(row['price'])})
+            print(f"✅ {row['code']} eklendi.")
     except Exception as e:
         print(f"TEFAS Hatası: {e}")
-        my_funds_data = pd.DataFrame()
 
-    # 2. ALTIN.S1 Verisini Çek (Yahoo Finance)
+    # 2. ALTIN.S1 Verisi (Yahoo Finance)
     try:
-        print("ALTIN.S1 verisi çekiliyor...")
-        # 'period="1d"' bazen boş dönebilir, '5d' alıp en sonuncuyu seçiyoruz
-        altin_df = yf.download("ALTINS1.IS", period="5d", progress=False)
-        if not altin_df.empty:
-            last_price = float(altin_df['Close'].iloc[-1].iloc[0] if isinstance(altin_df['Close'].iloc[-1], pd.Series) else altin_df['Close'].iloc[-1])
-            altin_row = pd.DataFrame([{'date': TODAY, 'code': 'ALTIN.S1', 'price': last_price}])
-            my_funds_data = pd.concat([my_funds_data, altin_row], ignore_index=True)
-            print(f"ALTIN.S1 başarıyla eklendi: {last_price}")
+        import yfinance as yf # Sadece burada çağırıyoruz
+        altin = yf.download("ALTINS1.IS", period="5d", progress=False)
+        if not altin.empty:
+            # En son kapanış fiyatını al
+            last_price = float(altin['Close'].iloc[-1])
+            portfolio_data.append({'code': 'ALTIN.S1', 'price': last_price})
+            print(f"✅ ALTIN.S1 eklendi: {last_price}")
     except Exception as e:
         print(f"ALTIN.S1 Hatası: {e}")
 
-    # 3. Discord Mesajı Gönder
-    if not my_funds_data.empty:
-        send_discord_message(my_funds_data)
+    # 3. Discord'a Gönder
+    if portfolio_data:
+        send_discord_message(portfolio_data)
     else:
-        print("Gönderilecek veri bulunamadı!")
+        print("❌ Hiç veri çekilemedi!")
 
-def send_discord_message(df):
+def send_discord_message(data_list):
     fields = []
-    for _, row in df.iterrows():
-        # Fiyatı sayıya çevir ve formatla
-        price_val = float(row['price'])
+    for item in data_list:
         fields.append({
-            "name": f"🔹 {row['code']}",
-            "value": f"**Fiyat:** {price_val:.4f} TL",
+            "name": f"🔹 {item['code']}",
+            "value": f"**Fiyat:** {item['price']:.4f} TL",
             "inline": True
         })
 
     payload = {
         "embeds": [{
-            "title": f"📈 Portföy Günlük Verileri ({TODAY})",
-            "color": 3066993, # Yeşil tonu
+            "title": f"📈 Günlük Portföy Özeti ({TODAY})",
+            "color": 3066993,
             "fields": fields,
-            "footer": {"text": "Üniversite öğrencisi portföy takip sistemi"}
+            "footer": {"text": "Veriler otomatik güncellendi."}
         }]
     }
-    
-    res = requests.post(WEBHOOK_URL, json=payload)
-    if res.status_code == 204:
-        print("Discord mesajı gönderildi!")
-    else:
-        print(f"Discord Hatası: {res.status_code}")
+    requests.post(WEBHOOK_URL, json=payload)
 
 if __name__ == "__main__":
     main()
