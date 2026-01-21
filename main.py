@@ -1,90 +1,118 @@
 import os
 import requests
-import pandas as pd
 from tefas import Crawler
 from datetime import datetime, timedelta
 
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# Ziraat ve diger fonlar
-FUNDS = ["TTE", "ITP", "ZBB", "TZL"]
+# Ana fon listesi
+FUNDS = ["TTE", "ITP", "TZL"]
 
 TODAY = datetime.now().strftime("%Y-%m-%d")
 
 def main():
     if not WEBHOOK_URL:
-        print("DISCORD_WEBHOOK_URL tanimli degil!")
         return
 
     tefas = Crawler()
     results = []
 
-    # 1️⃣ TEFAS FONLARI (son 5 gun, en guncel veri)
+    # ======================
+    # 1️⃣ TEFAS (ZBB dahil)
+    # ======================
     try:
-        start_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
         data = tefas.fetch(start=start_date)
 
         if not data.empty:
-            filtered = (
-                data[data['code'].isin(FUNDS)]
-                .sort_values("date")
-                .groupby("code")
-                .tail(1)
-            )
+            data = data.sort_values("date")
 
-            for _, row in filtered.iterrows():
+            # Normal fonlar
+            for code in FUNDS:
+                df = data[data["code"] == code]
+                if not df.empty:
+                    results.append({
+                        "code": code,
+                        "price": float(df.iloc[-1]["price"])
+                    })
+
+            # 🔥 ZBB FIX (kod varyasyonlu)
+            zbb_df = data[data["code"].str.startswith("ZB")]
+            if not zbb_df.empty:
+                zbb_latest = zbb_df.iloc[-1]
                 results.append({
-                    "code": row["code"],
-                    "price": float(row["price"])
+                    "code": "ZBB",
+                    "price": float(zbb_latest["price"])
                 })
-    except Exception as e:
-        print(f"TEFAS hatasi: {e}")
 
-    # 2️⃣ ALTIN.S1 (NaN ve kapali gun guvenli)
+    except Exception as e:
+        results.append({"code": "TEFAS_HATA", "price": 0})
+
+    # ======================
+    # 2️⃣ ALTIN.S1 FIX
+    # ======================
     try:
         import yfinance as yf
 
-        altin_df = yf.download("ALTINS1.IS", period="10d", progress=False)
+        price = None
 
-        if not altin_df.empty:
-            last_price = altin_df["Close"].dropna().iloc[-1]
+        # 1. deneme
+        df = yf.download("ALTINS1.IS", period="15d", progress=False)
+        if not df.empty:
+            closes = df["Close"].dropna()
+            if not closes.empty:
+                price = float(closes.iloc[-1])
+
+        # 2. deneme (fallback)
+        if price is None:
+            df = yf.download("ALTINS1", period="15d", progress=False)
+            if not df.empty:
+                closes = df["Close"].dropna()
+                if not closes.empty:
+                    price = float(closes.iloc[-1])
+
+        if price is not None:
             results.append({
                 "code": "ALTIN.S1",
-                "price": float(last_price)
+                "price": price
             })
-    except Exception as e:
-        print(f"ALTIN.S1 hatasi: {e}")
 
-    # 3️⃣ DISCORD'A GONDER
-    if results:
-        send_to_discord(results)
-    else:
-        print("Gonderilecek veri yok.")
+    except Exception:
+        pass
+
+    # ======================
+    # 3️⃣ DISCORD
+    # ======================
+    send_to_discord(results)
 
 def send_to_discord(data):
-    fields = []
+    if not data:
+        return
 
+    fields = []
     for item in sorted(data, key=lambda x: x["code"]):
         fields.append({
             "name": f"🔹 {item['code']}",
-            "value": f"**Fiyat:** {item['price']:.4f} TL",
+            "value": f"{item['price']:.4f} TL",
             "inline": True
         })
 
     payload = {
         "embeds": [{
-            "title": f"📈 Günlük Portföy Özeti ({TODAY})",
-            "color": 3066993,
+            "title": f"📈 Günlük Portföy ({TODAY})",
+            "color": 3447003,
             "fields": fields,
-            "footer": {
-                "text": "Ziraat & Midas Yatırım Takibi"
-            }
+            "footer": {"text": "Yatırım Takip Botu"}
         }]
     }
 
-    response = requests.post(WEBHOOK_URL, json=payload)
-    if response.status_code != 204:
-        print("Discord gonderim hatasi:", response.text)
+    r = requests.post(WEBHOOK_URL, json=payload)
+
+    # embed fail olursa text at
+    if r.status_code != 204:
+        requests.post(WEBHOOK_URL, json={
+            "content": str(data)
+        })
 
 if __name__ == "__main__":
     main()
