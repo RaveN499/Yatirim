@@ -1,73 +1,27 @@
-import requests
-import os
+from tefas import Crawler
+import pandas as pd
 from datetime import datetime
+import yfinance as yf
 
-# --- SENİN GÜNCEL PORTFÖYÜN ---
-# Maliyetler ve adetler Ocak 2026 verilerindir
-portfoy = {
-    "TTE": {"adet": 500, "maliyet": 1.4532},
-    "ITP": {"adet": 400, "maliyet": 2.1240},
-    "ZPX30": {"adet": 5, "maliyet": 155.20},
-    "TZL": {"adet": 9000, "maliyet": 0.110665}, 
-    "ALTINS1": {"adet": 40, "maliyet": 24.10}
-}
+tefas = Crawler()
+funds = ["TTE", "ITP", "ZPX", "TZL"]
+today = datetime.now().strftime("%Y-%m-%d")
 
-def veri_getir(kod):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
-    try:
-        if kod == "ALTINS1":
-            # Sertifika verisi için BloombergHT (TEFAS'ta bulunmaz)
-            url = "https://www.bloomberght.com/borsa/hisse/darphane-altin-sertifikasi"
-            r = requests.get(url, headers=headers, timeout=10)
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(r.text, 'html.parser')
-            fiyat = soup.find("small", {"data-type": "son_fiyat"}).text
-            return float(fiyat.replace(".", "").replace(",", "."))
-        
-        elif kod == "TZL":
-            # 1,01 TL kârı yakalamak için gereken hassas birim fiyat
-            return 0.110777
-        
-        else:
-            # Fonlar için doğrudan TEFAS API mantığı (Paylaştığın repo yöntemi)
-            url = "https://www.tefas.gov.tr/api/Common/GetData"
-            # Bu kısım TEFAS'ın arka plandaki veri talebini simüle eder
-            payload = {
-                "fontip": "YAT",
-                "sfontip": "HEPSI",
-                "fkod": kod
-            }
-            # TEFAS ana analiz sayfasından veriyi çekiyoruz
-            ana_url = f"https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod={kod}"
-            r = requests.get(ana_url, headers=headers, timeout=10)
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(r.text, 'html.parser')
-            fiyat = soup.find("span", {"id": "MainContent_LBL_LASTPRICE"}).text
-            return float(fiyat.replace(".", "").replace(",", "."))
-            
-    except Exception:
-        return None
+# 1. TEFAS Verilerini Çek
+data = tefas.fetch(start=today, name=None) # Tüm fonları çekip sonra filtrelemek daha hızlı olabilir
+my_funds_data = data[data['code'].isin(funds)][['date', 'code', 'price']]
 
-# --- ANALİZ VE RAPORLAMA ---
-rapor = f"📅 **{datetime.now().strftime('%d.%m.%Y')} KESİN PORTFÖY RAPORU**\n"
-rapor += "----------------------------------\n"
-toplam_kar = 0
+# 2. ALTIN.S1 Verisini Çek
+altin_s1 = yf.download("ALTINS1.IS", start=today)
+if not altin_s1.empty:
+    altin_price = altin_s1['Close'].iloc[-1]
+    altin_row = pd.DataFrame([{'date': today, 'code': 'ALTIN.S1', 'price': altin_price}])
+    my_funds_data = pd.concat([my_funds_data, altin_row], ignore_index=True)
 
-for kod, veri in portfoy.items():
-    guncel = veri_getir(kod)
-    if guncel:
-        kar = (guncel - veri['maliyet']) * veri['adet']
-        toplam_kar += kar
-        rapor += f"🔹 **{kod}**: {guncel:.4f} TL (Kâr: {kar:,.2f} TL)\n"
-    else:
-        rapor += f"⚠️ **{kod}**: Veri şu an çekilemedi.\n"
-
-rapor += "----------------------------------\n"
-rapor += f"💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**\n"
-rapor += "🚀 *Şubat Ayı 4.000 TL Hedefine Adım Adım!*"
-
-# Discord Gönderimi
-webhook = os.getenv('DISCORD_WEBHOOK')
-if webhook:
-    requests.post(webhook, json={"content": rapor})
-print(rapor)
+# 3. Dosyaya Kaydet (Üstüne ekleyerek devam eder)
+try:
+    existing_df = pd.read_csv("portfolio_history.csv")
+    final_df = pd.concat([existing_df, my_funds_data]).drop_duplicates()
+    final_df.to_csv("portfolio_history.csv", index=False)
+except FileNotFoundError:
+    my_funds_data.to_csv("portfolio_history.csv", index=False)
