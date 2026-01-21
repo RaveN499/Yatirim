@@ -2,78 +2,74 @@ import requests
 import yfinance as yf
 import os
 import pandas as pd
+from datetime import datetime
 
-# --- PORTFÖYÜN ---
+# --- SENİN GERÇEK VERİLERİN ---
 portfoy = {
-    "TTE": {"adet": 500, "maliyet": 1.45},
-    "ITP": {"adet": 400, "maliyet": 2.12},
-    "ZPX30": {"adet": 5, "maliyet": 155.0},
-    "TZL": {"adet": 9000, "maliyet": 0.1107}, # TZL fiyatı hep 1'dir
+    "TTE": {"adet": 500, "maliyet": 1.4532},
+    "ITP": {"adet": 400, "maliyet": 2.1240},
+    "ZPX30": {"adet": 5, "maliyet": 155.20},
+    "TZL": {"adet": 9000, "maliyet": 0.110665}, # 995.99 TL / 9000 adet
     "ALTIN.S1": {"adet": 40, "maliyet": 24.10}
 }
 
-def get_all_funds():
+def get_price(kod):
+    # 1. ALTIN SERTİFİKASI
+    if kod == "ALTIN.S1":
+        try:
+            ticker = yf.Ticker("ALTIN.S1.IS")
+            hist = ticker.history(period="5d") # Daha geniş bir aralık bakıyoruz
+            if not hist.empty:
+                return float(hist['Close'].iloc[-1])
+        except: return None
+
+    # 2. FONLAR İÇİN TEFAS (Daha güvenli bir yöntem)
     url = "https://www.tefas.gov.tr/api/Common/GetFunds"
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "X-Requested-With": "XMLHttpRequest",
-        "Origin": "https://www.tefas.gov.tr",
-        "Referer": "https://www.tefas.gov.tr/FonAnaliz.aspx"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "X-Requested-With": "XMLHttpRequest"
     }
-    data = {"fontype": "YAT"} # Tüm yatırım fonlarını getir
-    
     try:
-        response = requests.post(url, data=data, headers=headers, timeout=20)
+        # TZL için bazen fiyat 1.0 görünür, 0.1107'yi yakalamak için tüm veriyi tarıyoruz
+        response = requests.post(url, data={"fontype": "YAT"}, headers=headers, timeout=15)
         if response.status_code == 200:
-            return response.json().get('data', [])
+            data = response.json().get('data', [])
+            match = next((x for x in data if x['FundCode'] == kod), None)
+            if match:
+                return float(match['Price'])
     except:
-        return []
-    return []
-
-def get_gold_price():
-    # Altın için Yahoo bazen GitHub'da naz yapar, farklı bir yöntem deniyoruz
+        pass
+    
+    # 3. YEDEK KAYNAK (Eğer TEFAS patlarsa Mynet denemesi)
     try:
-        gold = yf.Ticker("ALTIN.S1.IS")
-        # En son kapanış fiyatını al
-        hist = gold.history(period="2d")
-        if not hist.empty:
-            return float(hist['Close'].iloc[-1])
+        url_mynet = f"https://finans.mynet.com/borsa/yatirimfonlari/{kod}/"
+        r = requests.get(url_mynet, headers=headers, timeout=10)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(r.text, "html.parser")
+        fiyat_tag = soup.select_one(".fn-last-price")
+        if fiyat_tag:
+            return float(fiyat_tag.text.replace(".", "").replace(",", "."))
     except:
         return None
 
-# Verileri topla
-all_funds_data = get_all_funds()
-gold_price = get_gold_price()
-
-# Rapor oluştur
-rapor = "📈 **GÜNLÜK PORTFÖY RAPORU** 📈\n"
+# --- RAPORLAMA ---
+rapor = f"📅 **{datetime.now().strftime('%d.%m.%Y')} PORTFÖY RAPORU**\n"
 rapor += "----------------------------------\n"
 toplam_kar = 0
 
 for kod, veri in portfoy.items():
-    guncel_fiyat = None
-    
-    if kod == "ALTIN.S1":
-        guncel_fiyat = gold_price
-    elif kod == "TZL":
-        guncel_fiyat = 1.0 # Para piyasası fonu birim fiyatı her zaman 1'dir
-    else:
-        # İndirdiğimiz listeden ilgili fonu bul
-        match = next((x for x in all_funds_data if x['FundCode'] == kod), None)
-        if match:
-            guncel_fiyat = float(match['Price'])
-
-    if guncel_fiyat:
-        kar = (guncel_fiyat - veri['maliyet']) * veri['adet']
+    guncel = get_price(kod)
+    if guncel:
+        kar = (guncel - veri['maliyet']) * veri['adet']
         toplam_kar += kar
-        rapor += f"🔹 **{kod}**: {guncel_fiyat:.4f} TL (Kâr: {kar:,.2f} TL)\n"
+        rapor += f"🔹 **{kod}**: {guncel:.4f} TL (Kâr: {kar:,.2f} TL)\n"
     else:
-        rapor += f"⚠️ **{kod}**: Veri alınamadı!\n"
+        rapor += f"⚠️ **{kod}**: Fiyat şu an alınamadı.\n"
 
 rapor += "----------------------------------\n"
 rapor += f"💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**"
 
-# Discord'a gönder
+# Discord Gönderimi
 webhook = os.getenv('DISCORD_WEBHOOK')
 if webhook:
     requests.post(webhook, json={"content": rapor})
