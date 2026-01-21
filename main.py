@@ -3,47 +3,56 @@ import yfinance as yf
 import os
 from bs4 import BeautifulSoup
 
-# PORTFÖYÜN
-# Not: TZL için bankadaki 'Birim Fiyat' neyse onu yazmalısın. 
-# Eğer kârı göremiyorsan maliyeti biraz daha düşük (örneğin 1.0) yazıp deneme yapabilirsin.
+# --- PORTFÖYÜN (Kendi değerlerinle güncelle) ---
 portfoy = {
-    "TTE": {"adet": 5000, "maliyet": 1.42},
-    "ITP": {"adet": 3000, "maliyet": 2.10},
-    "ZPX30": {"adet": 100, "maliyet": 150.0},
-    "TZL": {"adet": 9000, "maliyet": 1.0}, # ÖRNEK: Maliyeti bir tık düşük yazarsan kâr görünür
-    "ALTIN.S1": {"adet": 100, "maliyet": 22.50}
+    "TTE": {"adet": 500, "maliyet": 1.45},
+    "ITP": {"adet": 400, "maliyet": 2.12},
+    "ZPX30": {"adet": 5, "maliyet": 155.0},
+    "TZL": {"adet": 9000, "maliyet": 0.1107},
+    "ALTIN.S1": {"adet": 40, "maliyet": 24.10}
 }
 
 def get_price(kod):
+    # Daha profesyonel "Ben insanım" kimliği
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+    }
+
+    # 1. ALTIN SERTİFİKASI (Yahoo Finance)
+    if kod == "ALTIN.S1":
+        try:
+            # yf.download sunucularda bazen daha iyi çalışır
+            data = yf.download("ALTIN.S1.IS", period="1d", progress=False)
+            if not data.empty:
+                return float(data['Close'].iloc[-1])
+        except:
+            return None
+
+    # 2. FONLAR (Mynet denemesi)
     try:
-        if kod == "ALTIN.S1":
-            ticker = yf.Ticker("ALTIN.S1.IS")
-            price = ticker.history(period="1d")['Close'].iloc[-1]
-            return float(price)
-        else:
-            url = f"https://finans.mynet.com/borsa/yatirimfonlari/{kod}/"
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        url = f"https://finans.mynet.com/borsa/yatirimfonlari/{kod}/"
+        r = requests.get(url, headers=headers, timeout=15)
+        
+        if r.status_code == 200:
             soup = BeautifulSoup(r.text, "html.parser")
-            
-            # Mynet bazen fiyatı farklı etiketlerde sunar, iki seçeneği de deniyoruz
-            fiyat_etiketi = soup.select_one(".fn-last-price") or soup.select_one("#siradaki-deger")
+            # Mynet'in olası tüm fiyat etiketlerini tarıyoruz
+            fiyat_etiketi = (
+                soup.select_one(".fn-last-price") or 
+                soup.select_one("#siradaki-deger") or
+                soup.find("span", {"id": "siradaki-deger"})
+            )
             
             if fiyat_etiketi:
-                fiyat_metni = fiyat_etiketi.text.replace(".", "").replace(",", ".").strip()
-                return float(fiyat_metni)
-            return None
-    except Exception as e:
-        print(f"Hata ({kod}): {e}")
-        return None
+                # "1.234,56" formatını "1234.56" formatına çeviriyoruz
+                temiz_metin = fiyat_etiketi.text.strip().replace(".", "").replace(",", ".")
+                return float(temiz_metin)
+    except:
+        pass
+    return None
 
-def send_discord(mesaj):
-    webhook = os.getenv('DISCORD_WEBHOOK')
-    if webhook:
-        requests.post(webhook, json={"content": mesaj})
-
-# Raporlama
+# --- RAPOR OLUŞTURMA ---
 rapor = "📈 **GÜNLÜK PORTFÖY RAPORU** 📈\n"
-rapor += "----------------------------------\n"
 toplam_kar = 0
 
 for kod, veri in portfoy.items():
@@ -53,10 +62,12 @@ for kod, veri in portfoy.items():
         toplam_kar += kar
         rapor += f"🔹 **{kod}**: {guncel:.4f} TL (Kâr: {kar:,.2f} TL)\n"
     else:
-        rapor += f"⚠️ **{kod}**: Fiyat çekilemedi!\n"
+        rapor += f"⚠️ **{kod}**: Fiyat alınamadı!\n"
 
-rapor += "----------------------------------\n"
-rapor += f"💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**"
+rapor += f"\n💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**"
 
-send_discord(rapor)
+# Discord'a gönder
+webhook = os.getenv('DISCORD_WEBHOOK')
+if webhook:
+    requests.post(webhook, json={"content": rapor})
 print(rapor)
