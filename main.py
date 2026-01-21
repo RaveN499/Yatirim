@@ -1,70 +1,77 @@
 import requests
 import yfinance as yf
 import os
-from bs4 import BeautifulSoup
+import pandas as pd
 
-# --- PORTFÖYÜN (Kendi değerlerinle güncelle) ---
+# --- PORTFÖYÜN ---
 portfoy = {
     "TTE": {"adet": 500, "maliyet": 1.45},
     "ITP": {"adet": 400, "maliyet": 2.12},
     "ZPX30": {"adet": 5, "maliyet": 155.0},
-    "TZL": {"adet": 9000, "maliyet": 0.1107},
+    "TZL": {"adet": 9000, "maliyet": 0.1107}, # TZL fiyatı hep 1'dir
     "ALTIN.S1": {"adet": 40, "maliyet": 24.10}
 }
 
-def get_price(kod):
-    # Daha profesyonel "Ben insanım" kimliği
+def get_all_funds():
+    url = "https://www.tefas.gov.tr/api/Common/GetFunds"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        "User-Agent": "Mozilla/5.0",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://www.tefas.gov.tr",
+        "Referer": "https://www.tefas.gov.tr/FonAnaliz.aspx"
     }
-
-    # 1. ALTIN SERTİFİKASI (Yahoo Finance)
-    if kod == "ALTIN.S1":
-        try:
-            # yf.download sunucularda bazen daha iyi çalışır
-            data = yf.download("ALTIN.S1.IS", period="1d", progress=False)
-            if not data.empty:
-                return float(data['Close'].iloc[-1])
-        except:
-            return None
-
-    # 2. FONLAR (Mynet denemesi)
+    data = {"fontype": "YAT"} # Tüm yatırım fonlarını getir
+    
     try:
-        url = f"https://finans.mynet.com/borsa/yatirimfonlari/{kod}/"
-        r = requests.get(url, headers=headers, timeout=15)
-        
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, "html.parser")
-            # Mynet'in olası tüm fiyat etiketlerini tarıyoruz
-            fiyat_etiketi = (
-                soup.select_one(".fn-last-price") or 
-                soup.select_one("#siradaki-deger") or
-                soup.find("span", {"id": "siradaki-deger"})
-            )
-            
-            if fiyat_etiketi:
-                # "1.234,56" formatını "1234.56" formatına çeviriyoruz
-                temiz_metin = fiyat_etiketi.text.strip().replace(".", "").replace(",", ".")
-                return float(temiz_metin)
+        response = requests.post(url, data=data, headers=headers, timeout=20)
+        if response.status_code == 200:
+            return response.json().get('data', [])
     except:
-        pass
-    return None
+        return []
+    return []
 
-# --- RAPOR OLUŞTURMA ---
+def get_gold_price():
+    # Altın için Yahoo bazen GitHub'da naz yapar, farklı bir yöntem deniyoruz
+    try:
+        gold = yf.Ticker("ALTIN.S1.IS")
+        # En son kapanış fiyatını al
+        hist = gold.history(period="2d")
+        if not hist.empty:
+            return float(hist['Close'].iloc[-1])
+    except:
+        return None
+
+# Verileri topla
+all_funds_data = get_all_funds()
+gold_price = get_gold_price()
+
+# Rapor oluştur
 rapor = "📈 **GÜNLÜK PORTFÖY RAPORU** 📈\n"
+rapor += "----------------------------------\n"
 toplam_kar = 0
 
 for kod, veri in portfoy.items():
-    guncel = get_price(kod)
-    if guncel:
-        kar = (guncel - veri['maliyet']) * veri['adet']
-        toplam_kar += kar
-        rapor += f"🔹 **{kod}**: {guncel:.4f} TL (Kâr: {kar:,.2f} TL)\n"
+    guncel_fiyat = None
+    
+    if kod == "ALTIN.S1":
+        guncel_fiyat = gold_price
+    elif kod == "TZL":
+        guncel_fiyat = 1.0 # Para piyasası fonu birim fiyatı her zaman 1'dir
     else:
-        rapor += f"⚠️ **{kod}**: Fiyat alınamadı!\n"
+        # İndirdiğimiz listeden ilgili fonu bul
+        match = next((x for x in all_funds_data if x['FundCode'] == kod), None)
+        if match:
+            guncel_fiyat = float(match['Price'])
 
-rapor += f"\n💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**"
+    if guncel_fiyat:
+        kar = (guncel_fiyat - veri['maliyet']) * veri['adet']
+        toplam_kar += kar
+        rapor += f"🔹 **{kod}**: {guncel_fiyat:.4f} TL (Kâr: {kar:,.2f} TL)\n"
+    else:
+        rapor += f"⚠️ **{kod}**: Veri alınamadı!\n"
+
+rapor += "----------------------------------\n"
+rapor += f"💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**"
 
 # Discord'a gönder
 webhook = os.getenv('DISCORD_WEBHOOK')
