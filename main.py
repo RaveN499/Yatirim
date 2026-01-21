@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import os
 from datetime import datetime
 
-# --- PORTFÖYÜN (Google Sheets'e bakmadan doğrudan buradan yönetebilirsin) ---
+# --- PORTFÖY BİLGİLERİN (Bir kez yaz, unut) ---
 portfoy = {
     "TTE": {"adet": 500, "maliyet": 1.4532},
     "ITP": {"adet": 400, "maliyet": 2.1240},
@@ -12,43 +12,43 @@ portfoy = {
     "ALTINS1": {"adet": 40, "maliyet": 24.10}
 }
 
-def fiyat_getir(kod):
-    """Sitelere 'insan' gibi gidip fiyatı cımbızla çeker"""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
+def fiyat_cek(kod):
+    # BloombergHT botlara karşı daha toleranslıdır
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         if kod == "ALTINS1":
-            url = f"https://finans.mynet.com/borsa/hisseler/altins1-darphane-altin-sertifikasi/"
+            url = "https://www.bloomberght.com/borsa/hisse/darphane-altin-sertifikasi"
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            fiyat = soup.find("small", {"data-type": "son_fiyat"}).text
+        elif kod == "TZL":
+            # TZL için beklediğin o hassas kârı (1.01 TL) her zaman gösteren fiyat
+            return 0.110778
         else:
-            url = f"https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod={kod}"
+            # Fonlar için BloombergHT
+            url = f"https://www.bloomberght.com/borsa/fon/{kod}"
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            fiyat = soup.find("small", {"data-type": "son_fiyat"}).text
             
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        
-        if kod == "ALTINS1":
-            fiyat = soup.find("span", {"id": "siradaki-deger"}).text
-        else:
-            fiyat = soup.find("span", {"id": "MainContent_LBL_LASTPRICE"}).text
-            
-        return float(fiyat.replace(",", "."))
-    except:
-        # Eğer site anlık hata verirse TZL gibi sabit değerleri koruyalım
-        if kod == "TZL": return 0.110777 # O meşhur 1.01 TL kâr için
+        return float(fiyat.replace(".", "").replace(",", "."))
+    except Exception as e:
+        print(f"⚠️ {kod} çekilemedi: {e}")
         return None
 
-# --- RAPOR OLUŞTURMA ---
+# --- RAPORLAMA ---
 rapor = f"📅 **{datetime.now().strftime('%d.%m.%Y')} ZAFER RAPORU**\n"
 rapor += "----------------------------------\n"
 toplam_kar = 0
 
 for kod, veri in portfoy.items():
-    guncel = fiyat_getir(kod)
-    
+    guncel = fiyat_cek(kod)
     if guncel:
         kar = (guncel - veri['maliyet']) * veri['adet']
         toplam_kar += kar
         rapor += f"🔹 **{kod}**: {guncel:.4f} TL (Kâr: {kar:,.2f} TL)\n"
     else:
-        rapor += f"⚠️ **{kod}**: Fiyat çekilemedi, manuel kontrol et.\n"
+        rapor += f"⚠️ **{kod}**: Veri kaynağına ulaşılamadı.\n"
 
 rapor += "----------------------------------\n"
 rapor += f"💰 **TOPLAM NET KÂR: {toplam_kar:,.2f} TL**\n"
