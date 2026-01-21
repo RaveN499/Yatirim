@@ -4,53 +4,47 @@ import pandas as pd
 from tefas import Crawler
 from datetime import datetime, timedelta
 
-# Ayarlar
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+# Ziraat ve diger fonlarin
 FUNDS = ["TTE", "ITP", "ZBB", "TZL"]
 TODAY = datetime.now().strftime("%Y-%m-%d")
 YESTERDAY = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def main():
     tefas = Crawler()
-    portfolio_data = []
+    results = []
 
-    # 1. TEFAS Verileri (TTE, ITP, ZBB, TZL)
+    # 1. TEFAS FONLARI (TTE, ITP, ZBB, TZL)
     try:
+        # Once bugunun verisini dene
         data = tefas.fetch(start=TODAY)
-        if data.empty:
-            print("Bugün verisi yok, düne bakılıyor...")
+        if data.empty or not any(f in data['code'].values for f in FUNDS):
+            print("Bugunun verisi eksik, dunun verisi çekiliyor...")
             data = tefas.fetch(start=YESTERDAY)
         
-        my_funds = data[data['code'].isin(FUNDS)]
-        for _, row in my_funds.iterrows():
-            portfolio_data.append({'code': row['code'], 'price': float(row['price'])})
-            print(f"✅ {row['code']} eklendi.")
+        filtered = data[data['code'].isin(FUNDS)]
+        for _, row in filtered.iterrows():
+            results.append({"code": row['code'], "price": float(row['price'])})
     except Exception as e:
-        print(f"TEFAS Veri Hatası: {e}")
+        print(f"TEFAS hatasi: {e}")
 
-    # 2. ALTIN.S1 Verisi (BIST Altın Sertifikası)
+    # 2. ALTIN.S1 (Import hatasi vermemesi icin fonksiyona gomduk)
     try:
         import yfinance as yf
-        # period="5d" yaparak en son kapanış fiyatını garantiye alıyoruz
-        altin = yf.download("ALTINS1.IS", period="5d", progress=False)
-        if not altin.empty:
-            last_price = float(altin['Close'].iloc[-1])
-            portfolio_data.append({'code': 'ALTIN.S1', 'price': last_price})
-            print(f"✅ ALTIN.S1 eklendi: {last_price}")
+        altin_df = yf.download("ALTINS1.IS", period="5d", progress=False)
+        if not altin_df.empty:
+            price = float(altin_df['Close'].iloc[-1])
+            results.append({"code": "ALTIN.S1", "price": price})
     except Exception as e:
-        print(f"ALTIN.S1 Çekilemedi: {e}")
+        print(f"Altin.S1 hatasi: {e}")
 
-    # 3. Discord Mesajı
-    if portfolio_data:
-        send_discord_message(portfolio_data)
-    else:
-        print("❌ Hiç veri bulunamadı!")
+    # 3. DISCORD'A GONDER
+    if results:
+        send_to_discord(results)
 
-def send_discord_message(data_list):
+def send_to_discord(data):
     fields = []
-    # Kodları alfabetik sırala
-    sorted_data = sorted(data_list, key=lambda x: x['code'])
-    for item in sorted_data:
+    for item in sorted(data, key=lambda x: x['code']):
         fields.append({
             "name": f"🔹 {item['code']}",
             "value": f"**Fiyat:** {item['price']:.4f} TL",
@@ -59,11 +53,10 @@ def send_discord_message(data_list):
 
     payload = {
         "embeds": [{
-            "title": f"📈 Portföy Özeti ({TODAY})",
+            "title": f"📈 Günlük Portföy Özeti ({TODAY})",
             "color": 3066993,
-            "description": "Ziraat ve Midas yatırımları için günlük takip.",
             "fields": fields,
-            "footer": {"text": "Veriler TEFAS ve BIST üzerinden çekildi."}
+            "footer": {"text": "Ziraat & Midas Yatırım Takibi"}
         }]
     }
     requests.post(WEBHOOK_URL, json=payload)
